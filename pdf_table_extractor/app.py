@@ -4,7 +4,6 @@ import camelot
 from deep_translator import GoogleTranslator
 from langdetect import detect
 from io import BytesIO
-from openpyxl import load_workbook
 from openpyxl.styles import Alignment
 
 # === Language Map ===
@@ -44,21 +43,6 @@ def split_merged_rows(df):
         else:
             new_rows.append(row.tolist())
     return pd.DataFrame(new_rows, columns=df.columns)
-
-def format_excel(writer, sheet_name, df):
-    df.to_excel(writer, sheet_name=sheet_name[:31], index=False)
-
-def post_formatting(excel_io, sheet_names):
-    wb = load_workbook(excel_io)
-    for sheet in sheet_names:
-        ws = wb[sheet]
-        for row in ws.iter_rows():
-            for cell in row:
-                cell.alignment = Alignment(wrap_text=True)
-        for col in ws.columns:
-            col_letter = col[0].column_letter
-            ws.column_dimensions[col_letter].width = 35
-    wb.save(excel_io)
 
 # === Streamlit UI ===
 st.set_page_config(page_title="PDF Table Extractor + Translator", layout="centered")
@@ -113,37 +97,48 @@ if new_file and (
 ):
     with st.spinner("Processing PDF..."):
         tables = camelot.read_pdf(new_file, pages='all', flavor='stream', strip_text='\n', edge_tol=200, row_tol=10)
-        all_dfs = []
+
         output = BytesIO()
-        writer = pd.ExcelWriter(output, engine='openpyxl')
+        sheet_names = []
 
-        for i, table in enumerate(tables):
-            df = table.df
-            if df.empty:
-                continue
-            df.columns = [str(col).strip() for col in df.columns]
-            df = split_merged_rows(df)
-            df = df.astype(str)
-            if enable_translation:
-                df = translate_df(df, st.session_state.confirmed_lang_code)
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            for i, table in enumerate(tables):
+                df = table.df
+                if df.empty:
+                    continue
 
-            sheet_name = f"Page_{table.page}_Table_{i+1}"
-            format_excel(writer, sheet_name, df)
-            all_dfs.append(sheet_name[:31])
+                df.columns = [str(col).strip() for col in df.columns]
+                df = split_merged_rows(df)
+                df = df.astype(str)
 
-        writer.close()
-        post_formatting(output, all_dfs)
+                if enable_translation:
+                    df = translate_df(df, st.session_state.confirmed_lang_code)
+
+                sheet_name = f"Page_{table.page}_Table_{i+1}"[:31]
+                df.to_excel(writer, sheet_name=sheet_name, index=False)
+                sheet_names.append(sheet_name)
+
+            # ✅ Apply formatting after all sheets are created
+            workbook = writer.book
+            for sheet in sheet_names:
+                ws = workbook[sheet]
+                for row in ws.iter_rows():
+                    for cell in row:
+                        cell.alignment = Alignment(wrap_text=True)
+                for col in ws.columns:
+                    col_letter = col[0].column_letter
+                    ws.column_dimensions[col_letter].width = 35
+
         output.seek(0)
 
         st.success("✅ Done! Download your formatted Excel below:")
         st.download_button(
             label="📥 Download Translated Excel",
-            data=output.getvalue(),
+            data=output,
             file_name="translated_tables.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-        # ✅ Reset + rerun safely
         st.session_state.processing_complete = True
         st.session_state.confirmed = False
         st.session_state.run_without_translation = False
