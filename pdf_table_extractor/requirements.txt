@@ -1,0 +1,6 @@
+streamlit
+camelot-py[cv]
+pandas
+openpyxl
+deep-translator
+langdetect
